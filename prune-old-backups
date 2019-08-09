@@ -1,0 +1,140 @@
+#!/usr/bin/perl
+use strict;
+use POSIX qw(strftime);
+use File::Basename qw(&basename &dirname);
+use Getopt::Long;
+
+=pod
+
+=head1 NAME
+
+B<prune-old-backups> - remove old backup directories to reclaim disk space
+
+=head1 SYNOPSIS
+
+B<prune-old-backups> B<--backupdir|-d>=I<backup-directory> [ B<--pctutil>=I<max-disk-util-percentage> ]
+[ B<--age>=I<max-age> ]
+
+=head1 DESCRIPTION
+
+B<prune-old-backups> determines which backup directories under
+I<backup-directory> are no longer needed and removes them.  Backups older
+than I<max-age> are always removed.  If the disk utilization on the
+backup volume is greater than I<max-disk-util-percentage>, the oldest
+backups are removed until the disk utilization drops below the threshold
+(note that this can be problematic with newer NAS devices that do not
+report recovered space as free immediately).
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--backupdir>=I<backup-directory>
+
+Use I<backup-directory> as the root of the backup directory structure to prune.
+
+=item B<--pctutil>=I<max-disk-util-percentage>
+
+Remove backups until disk utilization on I<backup-directory> is less
+than or equal to I<max-disk-util-percentage>. Defaults to 90.
+
+=item B<--age>=I<max-age>
+
+Remove backups older than I<max-age> days.  Defaults to 180 days.
+
+-item B<--min-backups>=I<min-backup-count>
+
+Always keep at least I<min-backup-count> backups, regardless of other pruning heuristics.  Defaults to 14.
+
+=back
+
+=head1 TO DO
+
+=over 4
+
+=item * Preserve one backup per week for backups older than X days, similar to Apple's Time Machine.
+
+=item * Preserve one backup per month for backups older than Y months.
+
+=item * Handle space recovery effectively in the case where the backup dir is on a NAS that lies about disk util.
+
+=back
+
+=head1 AUTHOR
+
+David Merrill <alternatecrow@gmail.com>
+
+=cut
+
+my %opt;
+GetOptions(\%opt,
+	"backupdirectory|directory|d=s",
+	"pctutil=i",
+	"age=i",
+	"min-backups=i",
+) or pod2usage();
+
+my $backupdir = $opt{backupdirectory};
+pod2usage("--backupdir is a required option") unless $backupdir;
+die "Error: Invalid backup directory '$backupdir'!\n" unless -d $backupdir;
+chdir $backupdir or die "Error: Cannot chdir to $backupdir: $!\n";
+
+mkdir ".trash";
+
+# How full the disk can get (in percent) before scrubbing old backups
+my $max_disk_full = $opt{pctutil} || 90;
+
+# How old a backup can be (in days) before it gets scrubbed
+my $max_age = $opt{age} || 180;
+
+# Minimum number of backups to keep
+my $min_backups = $opt{"min-backups"} || 14;
+
+# calculate current disk util
+sub disk_pct {
+	my $dir = shift;
+	my @a = `df -P -k $dir`;
+	my @b = split(/\s+/,$a[1]);
+	my $pct = $b[4];
+	$pct =~ s/\%$//;
+	return $pct;
+}
+
+my $scrub_count = 0;
+
+my %backups;
+my $backup;
+foreach $backup (<*/2*>) {
+	my ($host,$date) = split /\//,$backup;
+	# print "* $host on $date \n";
+	$backups{$date}{$host}++;
+}
+
+my $oldest_to_keep = strftime("%Y%m%d.%H%M%S",localtime($^T - int(60*60*24*$max_age)));
+
+while(1) {
+	last if scalar(keys %backups) <= $min_backups;
+
+	my $date;
+	($date) = sort keys %backups;
+
+	last unless ((disk_pct($backupdir) > $max_disk_full) || ($date lt $oldest_to_keep));
+
+	foreach my $host (keys %{$backups{$date}}) {
+		print "Scrubbing $date backup of $host.\n";
+		rename "$host/$date", ".trash/${host}_${date}"
+			or die "Error: Cannot rename $host/$date to .trash/${host}_${date}: $!\n";
+	}
+
+	$scrub_count++;
+	delete $backups{$date};
+}
+
+system("/bin/rm -rf .trash/*");
+if ($?) {
+	die "Error from rm command: $!\n";
+}
+
+print "\n" if $scrub_count > 0;
+
+exit 0;

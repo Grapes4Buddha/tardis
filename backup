@@ -1,0 +1,298 @@
+#!/usr/bin/perl
+use strict;
+use POSIX qw(strftime);
+use File::Basename qw(&basename &dirname);
+use Cwd 'realpath';
+use Getopt::Long;
+use Sys::Hostname;
+use Pod::Usage;
+
+=pod
+
+=head1 NAME
+
+B<backup> - efficient rsync-based linked backups
+
+=head1 SYNOPSIS
+
+B<backup> [ B<--host>=I<remote-host> ] [ B<--quiet> ]
+B<--backupdir|-d>=I<backup-directory> I<source-dir> [ I<source-dir> ... ]
+
+=head1 DESCRIPTION
+
+Backup one or more I<source-dir> directories to I<backup-directory>.
+If I<remote-host> is specified, I<source-dir>s are taken to be located
+on the remote host, which must be accessble via SSH with private/public
+key authentication without a passphrase.
+
+If I<backup-directory>/I<hostname>/B<.exclude> exists, it is assumed to
+be a file suitable for use by rsync's B<--exclude-from> option to specify
+exclude patterns for the backup.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--host>=I<remote-host>
+
+Retrieve the files to backup from I<remote-host>.  B<backup> always
+pulls remote files into the backup directory due to the way rsync hard
+linking works.
+
+=item B<--backupdir>=I<backup-directory>
+
+Use I<backup-directory> as the top-level directory into which files
+should be copied.  Under B<backup-directory> will be a directory for
+the host being backed up.  Under the host directory will be a set of
+time-stamped directories, each of which will contain a backup of the
+files in the backup set.
+
+=item B<--quiet>
+
+Normally, B<backup> will emit rsync output on STDOUT as well as a
+log file.  B<--quiet> suppresses the STDOUT messages but still writes
+to the log file.
+
+=item I<source-dir>
+
+The directory to back up.  Can be specified multiple times to backup multiple directories.
+
+=back
+
+=head1 AUTHOR
+
+David Merrill <alternatecrow@gmail.com>
+
+=cut
+
+
+my %opt;
+GetOptions(\%opt,
+	"host=s",
+	"quiet",
+	"backupdirectory|directory|d=s",
+) or pod2usage();
+
+my $backupdir = $opt{backupdirectory};
+pod2usage("--backupdir is a required option") unless $backupdir;
+die "Error: Invalid backup directory '$backupdir'!\n" unless -d $backupdir;
+
+# Maximum number of previous backup directories to use as link references.
+# This is >1 in case there have been recent backup failures or files
+# have been moved around a lot.
+my $max_linkdirs = 10;
+
+# Environment variables needed by rsync
+# These used to be necessary... might not need anymore?
+# $ENV{USER} = "root";
+# $ENV{LOGNAME} = "root";
+# $ENV{HOME} = "/";
+# $ENV{RSYNC_PASSWORD} = "backup";
+
+# my %WAKEUP;
+# $WAKEUP{bunny} = "00:0a:95:77:8f:c2";
+# $WAKEUP{snake} = "00:21:9b:00:83:56";
+
+my %rsync_errcode = (
+	1 => "RERR_SYNTAX -- syntax or usage error",
+	2 => "RERR_PROTOCOL -- protocol incompatibility",
+	3 => "RERR_FILESELECT -- errors selecting input/output files, dirs",
+	4 => "RERR_UNSUPPORTED -- requested action not supported",
+	5 => "RERR_STARTCLIENT -- error starting client-server protocol",
+	6 => "RERR_LOG_FAILURE -- daemon unable to append to log-file",
+	10 => "RERR_SOCKETIO -- error in socket IO",
+	11 => "RERR_FILEIO -- error in file IO",
+	12 => "RERR_STREAMIO -- error in rsync protocol data stream",
+	13 => "RERR_MESSAGEIO -- errors with program diagnostics",
+	14 => "RERR_IPC -- error in IPC code",
+	20 => "RERR_SIGNAL -- status returned when sent SIGUSR1, SIGINT",
+	21 => "RERR_WAITCHILD -- some error returned by waitpid()",
+	22 => "RERR_MALLOC -- error allocating core memory buffers",
+	23 => "RERR_PARTIAL -- partial transfer",
+	24 => "RERR_VANISHED -- file(s) vanished on sender side",
+	25 => "RERR_DEL_LIMIT -- skipped some deletes due to --max-delete",
+	30 => "RERR_TIMEOUT -- timeout in data send/receive",
+);
+
+
+# server is specified on command line
+my $host;
+if ($opt{host}) {
+	$host = $opt{host};
+} else {
+	$host = hostname;
+}
+
+my @source_dirs = @ARGV;
+pod2usage("No source directories specified!") unless @source_dirs;
+
+# Old code to do wake-on-lan for the remote host.  Might still be handy at some point?
+# There was some odd stuff here due to an old PPC-based Mac that liked to go back to
+# sleep shortly after being awakened.
+# ------
+#
+# unless ($opt{local}) {
+# # wake up the remote host if necessary
+# # my $waiter_pid;
+# 	if (my $mac = $WAKEUP{$host}) {
+# 		system("/usr/sbin/etherwake -i eth0 $mac");
+# 		my $i = 0;
+# 		while (1) {
+# 			system("rsync ${host}:: > /dev/null 2>&1");
+# 			last if $? == 0;
+# 			$i++;
+# 			die "Error: Cannot connect to $host: $!\n" if $i > 99;
+# 		}
+# 
+# # 	unless ($waiter_pid = fork) {
+# # 		while(1) {
+# # 			system("/usr/sbin/etherwake -i eth0 $mac");
+# # 			sleep 2;
+# # 		}
+# # 		exit 0;
+# # 	}
+# 	}
+# }
+
+# Local destination dir for backups
+my $dest = "$backupdir/$host";
+
+# today's backup destination directory
+my $snapshot_dir = strftime("%Y%m%d.%H%M%S",localtime($^T));
+
+# delete today's backup dir if it already exists (e.g. if script is being
+# re-run). Really this should never happen since we now have seconds in
+# the directory name but check anyway.
+
+if ( -d "$dest/$snapshot_dir") {
+	rename "$dest/$snapshot_dir","$dest/$snapshot_dir.trash";
+	system "rm -rf '$dest/$snapshot_dir.trash'";
+}
+
+# remove any empty backup directories -- this can happen if a backup fails
+map(rmdir $_, <$backupdir/$host/2*>);
+
+# find reference dirs for backup, up to the limit.
+my @linkdirs = reverse sort <$backupdir/$host/2*>;
+pop @linkdirs while @linkdirs > $max_linkdirs;
+map ($_ = basename($_), @linkdirs);
+
+system("mkdir -p '$dest/$snapshot_dir'");
+die "Error: Could not create $dest/$snapshot_dir: $!\n" if $?;
+
+# Make sure the log file exists
+system("mkdir -p $dest/log");
+my $logfile = "$dest/log/$snapshot_dir.log";
+
+#
+# Compose rsync commands to mirror all the data from the server.
+# We have to do each source dir individually -- this is an rsync
+# limitation when pulling from a remote rsync server.
+#
+
+open LOGFILE, ">$logfile" or print "Error: Cannot write logfile $logfile: $!\n";
+print LOGFILE "* Backup started at ",scalar(localtime),"\n";
+
+foreach my $srcdir (@source_dirs) {
+
+	my $cmd = "rsync -avxSH";
+	foreach my $linkdir (@linkdirs) {
+		$cmd .= " --link-dest=../$linkdir";
+	}
+
+	$cmd .= " --exclude-from=$dest/.exclude" if -f "$dest/.exclude";
+	if ($opt{host}) {
+		$cmd .= " $host:$srcdir";
+	} else {
+		$cmd .= " $srcdir";
+	}
+	$cmd .= " $dest/$snapshot_dir";
+
+	print LOGFILE "\n\n*\n* Command to back up $srcdir:\n* $cmd\n*\n\n";
+
+	open (BACKUP,"-|","$cmd 2>&1") 
+		or die "Error: Cannot start backup command: $!\n";
+
+	while ($_ = <BACKUP>) {
+		next if /\/$/;
+		next if /\s->\s/;
+		print LOGFILE $_;
+		print $_ unless $opt{quiet};;
+	}
+	close BACKUP;
+	my $exit_value  = $? >> 8;
+
+	if ($exit_value) {
+		if ($rsync_errcode{$exit_value} =~ /^RERR_VANISHED/) {
+			# Ignore RERR_VANISHED as it doesn't reflect a bad backup enough to invalidate the whole thing.
+			print STDERR "Warning: rsync exit code for $srcdir was $exit_value ($rsync_errcode{$exit_value})!\n" unless $opt{quiet};
+			print LOGFILE "Warning: rsync exit code for $srcdir was $exit_value ($rsync_errcode{$exit_value})!\n";
+		} else {
+			print STDERR "BACKUP FAILED for $srcdir!\n" unless $opt{quiet};
+			print STDERR "** rsync exit code for $srcdir was $exit_value ($rsync_errcode{$exit_value})!\n" unless $opt{quiet};
+			print LOGFILE  "BACKUP FAILED for $srcdir!\n";
+			print LOGFILE "** rsync exit code for $srcdir was $exit_value ($rsync_errcode{$exit_value})!\n";
+
+			# Used to remove the backup directory if the backup was not successful.
+			# If you have a single link-dest and you're referencing an incomplete
+			# backup, you'll have to retransmit all of the missing files.
+			# Now that we can have multiple link-dest options, we're all set
+			# if there's an occasional bad backup.
+			#
+			# if ( -d "$dest/$snapshot_dir") {
+			#	rename "$dest/$snapshot_dir","$dest/$snapshot_dir.trash";
+			#	system "rm -rf '$dest/$snapshot_dir.trash'";
+			# }
+		}
+	}
+
+	# this is really lame but try to remove the backup directory.  It can only be removed if it is
+	# empty; this ensures that the next backup will not be using an empty directory as a reference.
+	system("rmdir '$dest/$snapshot_dir' >/dev/null 2>&1");
+
+	# make sure we have a current timestamp on the backup dir.  This is used to determine
+	# when to expire an old backup.
+	if (-d "$dest/$snapshot_dir") {
+		system("touch '$dest/$snapshot_dir'");
+	}
+
+}
+close LOGFILE;
+
+# cleanup for the old wake-on-lan stuff commented out above.
+# -----
+# if ($waiter_pid) {
+# 	kill 15,$waiter_pid;
+# 	wait;
+# }
+
+# $dest/$linkdir
+# $dest/$snapshot_dir
+my $incr_usage;
+my $full_usage;
+open DU, "du -sk $dest/$linkdirs[0] $dest/$snapshot_dir |"
+	or die "Error: Cannot run du command on $dest/$linkdirs[0] and $dest/$snapshot_dir: $!\n";
+while ($_ = <DU>) {
+	chomp;
+	my ($usage,$dir) = split;
+	next unless $dir eq "$dest/$snapshot_dir";
+	$incr_usage = $usage;
+}
+close DU;
+
+open DU, "du -sk $dest/$snapshot_dir |"
+	or die "Error: Cannot run du command on $dest/$snapshot_dir: $!\n";
+while ($_ = <DU>) {
+	chomp;
+	my ($usage,$dir) = split;
+	next unless $dir eq "$dest/$snapshot_dir";
+	$full_usage = $usage;
+}
+close DU;
+
+open USAGE, ">>$dest/log/disk_usage"
+	or die "Error: Cannot append to $dest/log/disk_usage: $!\n";
+printf USAGE "%s\t%d\t%d\n", $snapshot_dir, $incr_usage, $full_usage;
+close USAGE;
+
+exit 0;
