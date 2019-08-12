@@ -125,6 +125,7 @@ if ($opt{host}) {
 
 my @source_dirs = @ARGV;
 pod2usage("No source directories specified!") unless @source_dirs;
+pod2usage("Remote hosts must be specified using the --host option") if grep(/:/,@source_dirs);
 
 # Old code to do wake-on-lan for the remote host.  Might still be handy at some point?
 # There was some odd stuff here due to an old PPC-based Mac that liked to go back to
