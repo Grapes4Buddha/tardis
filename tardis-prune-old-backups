@@ -8,16 +8,16 @@ use Getopt::Long;
 
 =head1 NAME
 
-B<prune-old-backups> - remove old backup directories to reclaim disk space
+B<tardis-prune-old-backups> - remove old backup directories to reclaim disk space
 
 =head1 SYNOPSIS
 
-B<prune-old-backups> B<--backupdir|-d>=I<backup-directory> [ B<--pctutil>=I<max-disk-util-percentage> ]
+B<tardis-prune-old-backups> B<--backupdir|-d>=I<backup-directory> [ B<--pctutil>=I<max-disk-util-percentage> ]
 [ B<--age>=I<max-age> ]
 
 =head1 DESCRIPTION
 
-B<prune-old-backups> determines which backup directories under
+B<tardis-prune-old-backups> determines which backup directories under
 I<backup-directory> are no longer needed and removes them.  Backups older
 than I<max-age> are always removed.  If the disk utilization on the
 backup volume is greater than I<max-disk-util-percentage>, the oldest
