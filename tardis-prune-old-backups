@@ -79,7 +79,9 @@ pod2usage("--backupdir is a required option") unless $backupdir;
 die "Error: Invalid backup directory '$backupdir'!\n" unless -d $backupdir;
 chdir $backupdir or die "Error: Cannot chdir to $backupdir: $!\n";
 
-mkdir ".trash";
+unless (-d ".trash" ) {
+	mkdir ".trash" or die "Error: Cannot create trash dir: $!";
+}
 
 # How full the disk can get (in percent) before scrubbing old backups
 my $max_disk_full = $opt{pctutil} || 90;
@@ -128,11 +130,11 @@ while(1) {
 
 	$scrub_count++;
 	delete $backups{$date};
-}
 
-system("/bin/rm -rf .trash/*");
-if ($?) {
-	die "Error from rm command: $!\n";
+	system("/bin/rm -rf .trash/*");
+	if ($?) {
+		die "Error from rm command: $!\n";
+	}
 }
 
 print "\n" if $scrub_count > 0;
