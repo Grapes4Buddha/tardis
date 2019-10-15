@@ -7,6 +7,8 @@ use Getopt::Long;
 use Sys::Hostname;
 use Pod::Usage;
 
+my $RSYNC_OPTIONS = "-avxSH";
+
 =pod
 
 =head1 NAME
@@ -53,6 +55,10 @@ Normally, B<tardis> will emit rsync output on STDOUT as well as a
 log file.  B<--quiet> suppresses the STDOUT messages but still writes
 to the log file.
 
+=item B<--options>=I<rsync-options>
+
+Pass I<rsync-options> along as additional options to B<rsync>.
+
 =item I<source-dir>
 
 The directory to back up.  Can be specified multiple times to backup multiple directories.
@@ -71,6 +77,7 @@ GetOptions(\%opt,
 	"host=s",
 	"quiet",
 	"backupdirectory|directory|d=s",
+	"options=s",
 ) or pod2usage();
 
 my $backupdir = $opt{backupdirectory};
@@ -196,7 +203,12 @@ print LOGFILE "* Backup started at ",scalar(localtime),"\n";
 
 foreach my $srcdir (@source_dirs) {
 
-	my $cmd = "rsync -avxSH";
+	my $cmd = "rsync $RSYNC_OPTIONS";
+
+	if ($opt{options}) {
+		$cmd .= " " . $opt{options};
+	}
+
 	foreach my $linkdir (@linkdirs) {
 		$cmd .= " --link-dest=../$linkdir";
 	}
