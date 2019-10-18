@@ -13,7 +13,7 @@ B<tardis-prune-old-backups> - remove old backup directories to reclaim disk spac
 =head1 SYNOPSIS
 
 B<tardis-prune-old-backups> B<--backupdir|-d>=I<backup-directory> [ B<--pctutil>=I<max-disk-util-percentage> ]
-[ B<--age>=I<max-age> ]
+[ B<--age>=I<max-age> ] [ B<--min-inodes-free>=I<minimum-number-of-free-inodes> ]
 
 =head1 DESCRIPTION
 
@@ -42,9 +42,13 @@ than or equal to I<max-disk-util-percentage>. Defaults to 90.
 
 Remove backups older than I<max-age> days.  Defaults to 180 days.
 
--item B<--min-backups>=I<min-backup-count>
+=item B<--min-backups>=I<min-backup-count>
 
 Always keep at least I<min-backup-count> backups, regardless of other pruning heuristics.  Defaults to 14.
+
+=item B<-min-inodes-free>=I<minimum-number-of-free-inodes>
+
+Ensure that the backup volume has at least I<minimum-number-of-free-inodes> inodes free.
 
 =back
 
@@ -72,6 +76,7 @@ GetOptions(\%opt,
 	"pctutil=i",
 	"age=i",
 	"min-backups=i",
+	"inodes|min-inodes-free=i",
 ) or pod2usage();
 
 my $backupdir = $opt{backupdirectory};
@@ -92,14 +97,22 @@ my $max_age = $opt{age} || 180;
 # Minimum number of backups to keep
 my $min_backups = $opt{"min-backups"} || 14;
 
+# Minimum number of free inodes on the backup volume
+my $min_inodes = $opt{inodes} + 0;
+
 # calculate current disk util
 sub disk_pct {
 	my $dir = shift;
-	my @a = `df -P -k $dir`;
-	my @b = split(/\s+/,$a[1]);
-	my $pct = $b[4];
+	my $pct = `df --output=pcent "$dir" | tail -1`;
+	chomp $pct;
 	$pct =~ s/\%$//;
 	return $pct;
+}
+
+sub free_inodes {
+	my $dir = shift;
+	my $ifree = `df --output=iavail "$dir" | tail -1` + 0;
+	return $ifree;
 }
 
 my $scrub_count = 0;
@@ -120,7 +133,11 @@ while(1) {
 	my $date;
 	($date) = sort keys %backups;
 
-	last unless ((disk_pct($backupdir) > $max_disk_full) || ($date lt $oldest_to_keep));
+	if ((disk_pct($backupdir) <= $max_disk_full) && ($date ge $oldest_to_keep)) {
+		if (free_inodes($backupdir) >= $min_inodes) {
+			last;
+		}
+	}
 
 	foreach my $host (keys %{$backups{$date}}) {
 		print "Scrubbing $date backup of $host.\n";
