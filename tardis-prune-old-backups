@@ -133,11 +133,20 @@ while(1) {
 	my $date;
 	($date) = sort keys %backups;
 
-	if ((disk_pct($backupdir) <= $max_disk_full) && ($date ge $oldest_to_keep)) {
-		if (free_inodes($backupdir) >= $min_inodes) {
-			last;
-		}
+	my $free_inodes = free_inodes($backupdir);
+	my $disk_util =  disk_pct($backupdir);
+
+	if ($disk_util > $max_disk_full) {
+		print "Disk utilization is above $max_disk_full%";
+	} elsif ($date lt $oldest_to_keep) {
+		print "$date is older than $max_age days old";
+	} elsif ($free_inodes < $min_inodes) {
+		print "Need more inodes ($free_inodes / $min_inodes)";
+	} else {
+		last;
 	}
+
+	print ", ";
 
 	foreach my $host (keys %{$backups{$date}}) {
 		print "Scrubbing $date backup of $host.\n";
