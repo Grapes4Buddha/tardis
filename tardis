@@ -18,7 +18,7 @@ B<tardis> - efficient rsync-based linked backups
 =head1 SYNOPSIS
 
 B<tardis> [ B<--host>=I<remote-host> ] [ B<--quiet> ]
-B<--backupdir|-d>=I<backup-directory> I<source-dir> [ I<source-dir> ... ]
+B<--backupdir|-d>=I<backup-directory> B<--mount> I<source-dir> [ I<source-dir> ... ]
 
 =head1 DESCRIPTION
 
@@ -56,6 +56,12 @@ the host being backed up.  Under the host directory will be a set of
 time-stamped directories, each of which will contain a backup of the
 files in the backup set.
 
+=item B<--mount>
+
+Mount I<backup-directory> prior to performing the backup, and unmount it when
+done.  This option assumes that I<backup-directory> is actually a mountable
+volume listed in /etc/fstab.
+
 =item B<--quiet>
 
 Normally, B<tardis> will emit rsync output on STDOUT as well as a
@@ -78,18 +84,25 @@ David Merrill <alternatecrow@gmail.com>
 
 =cut
 
-
 my %opt;
 GetOptions(\%opt,
 	"host=s",
 	"quiet",
 	"backupdirectory|directory|d=s",
+	"mount",
 	"options=s",
 ) or pod2usage();
 
 my $backupdir = $opt{backupdirectory};
 pod2usage("--backupdir is a required option") unless $backupdir;
 die "Error: Invalid backup directory '$backupdir'!\n" unless -d $backupdir;
+
+if ( $opt{mount} && ! -d "$backupdir/lost+found" ) {
+	system("mount $backupdir");
+	if ($?) {
+		die "Error: could not mount $backupdir: $!\n";
+	}
+}
 
 # Maximum number of previous backup directories to use as link references.
 # This is >1 in case there have been recent backup failures or files
@@ -316,3 +329,9 @@ printf USAGE "%s\t%d\t%d\n", $snapshot_dir, $incr_usage, $full_usage;
 close USAGE;
 
 exit 0;
+
+END {
+	if ($opt{mount}) {
+		system("umount $backupdir");
+	}
+}
