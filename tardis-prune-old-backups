@@ -3,6 +3,7 @@ use strict;
 use POSIX qw(strftime);
 use File::Basename qw(&basename &dirname);
 use Getopt::Long;
+use Pod::Usage;
 
 =pod
 
@@ -103,6 +104,13 @@ my $min_inodes = $opt{inodes} + 0;
 # calculate current disk util
 sub disk_pct {
 	my $dir = shift;
+	if ($^O eq 'darwin') {
+		my $df = `df "$dir" | tail -1`;
+		my ($pct) = (split(/\s+/,$df))[4];
+		$pct =~ s/\%$//;
+		return $pct;
+	}
+	# linux
 	my $pct = `df --output=pcent "$dir" | tail -1`;
 	chomp $pct;
 	$pct =~ s/\%$//;
@@ -111,6 +119,13 @@ sub disk_pct {
 
 sub free_inodes {
 	my $dir = shift;
+	if ($^O eq 'darwin') {
+		my $df = `df "$dir" | tail -1`;
+		my ($pct) = (split(/\s+/,$df))[7];
+		$pct =~ s/\%$//;
+		return $pct;
+	}
+	#linux
 	my $ifree = `df --output=iavail "$dir" | tail -1` + 0;
 	return $ifree;
 }
