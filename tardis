@@ -94,8 +94,9 @@ directories.  The default is 10.
 
 =item B<--mount>
 
-Mount I<backup-directory> prior to performing the backup, and unmount it when
-done.  This option assumes that I<backup-directory> is actually a mountable
+Mount I<backup-directory> prior to performing the backup if it is not already mounted.
+Unmount it when done if it had to be mounted.
+This option assumes that I<backup-directory> is actually a mountable
 volume listed in /etc/fstab.  Not supported with B<--push>.
 
 =item B<--quiet>
@@ -120,18 +121,19 @@ directories.  Rsync will be called once per I<source-dir>.
 David Merrill <alternatecrow@gmail.com>
 
 =cut
+my $unmount_when_done = 0;
 
 my %opt;
 GetOptions(\%opt,
-	"host=s",
+  "host=s",
   "user=s",
   "pull",
   "push",
-	"quiet",
-	"backupdirectory|directory|d=s",
-	"mount",
+  "quiet",
+  "backupdirectory|directory|d=s",
+  "mount",
   "linkdirs=i",
-	"options=s",
+  "options=s",
 ) or pod2usage();
 
 my $backupdir = $opt{backupdirectory};
@@ -218,6 +220,7 @@ unless ($opt{push}) {
     if ($?) {
       die "Error: could not mount $backupdir: $!\n";
     }
+    $unmount_when_done = 1
   }
 }
 
@@ -348,15 +351,15 @@ foreach my $srcdir (@source_dirs) {
 	# empty; this ensures that the next backup will not be using an empty directory as a reference.
   on_dest("rmdir '$dest/$snapshot_dir' >/dev/null 2>&1");
 
-  # TODO: Is this really needed?  Check the timestamp on the backup dir w/o the touch.
-  # It's a PITA to do this on a remote backup server.
-  #
 	# make sure we have a current timestamp on the backup dir.  This is used to determine
-	# when to expire an old backup.
-  # if (-d "$dest/$snapshot_dir") {
-  # 	system("touch '$dest/$snapshot_dir'");
-  # }
-
+	# when to expire an old backup.  If we don't update the timestamp the rsync will use the
+	# same timestamp as the top level of the source directory, which probably won't change
+	# very often.
+	#
+	#if (-d "$dest/$snapshot_dir") {
+	#	system("touch '$dest/$snapshot_dir'");
+	#}
+	on_dest("touch -c '$dest/$snapshot_dir'");
 }
 close $LOG;
 
@@ -397,7 +400,7 @@ close USAGE;
 exit 0;
 
 END {
-	if ($opt{mount}) {
+	if ($unmount_when_done) {
 		system("umount $backupdir");
 	}
 }
