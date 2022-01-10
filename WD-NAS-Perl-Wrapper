@@ -1,0 +1,10 @@
+#!/bin/bash
+
+perlroot=/usr/local/modules/perl5
+perlexe="$perlroot/bin/perl"
+perlver=`$perlexe -e '$_ = $^V; s/^v//; print "$_\n";'`
+export PATH="$PATH:$perlroot/bin"
+export PERL5LIB="$perlroot/lib/perl-base:$perlroot/lib/perl/$perlver:$perlroot/share/perl/$perlver"
+
+exec $perlexe "$@"
+
