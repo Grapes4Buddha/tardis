@@ -310,6 +310,10 @@ foreach my $srcdir (@source_dirs) {
 		$cmd .= " --link-dest=../$linkdir";
 	}
 
+	unless ($exclude_file) {
+		$exclude_file = "$srcdir/.tardis_exclude" if -f "$srcdir/.tardis_exclude";
+	}
+
 	$cmd .= " --exclude-from=$exclude_file" if -f $exclude_file;
 
 	if ($opt{pull}) {
