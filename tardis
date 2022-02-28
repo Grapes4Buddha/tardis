@@ -220,6 +220,10 @@ unless ($opt{push}) {
     if ($?) {
       die "Error: could not mount $backupdir: $!\n";
     }
+    # mount wasn't returning an error code on failure...
+    unless(-d "$backupdir/lost+found") {
+      die "Error: $backupdir did not mount correctly! (But mount command did not exit with an error code)!\n";
+    }
     $unmount_when_done = 1
   }
 }
